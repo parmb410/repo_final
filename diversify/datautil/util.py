@@ -13,7 +13,8 @@ def act_param_init(args):
     tmp = {'emg': ((8, 1, 200), 6, 10)}
     args.num_classes, args.input_shape, args.grid_size = tmp[
         args.dataset][1], tmp[args.dataset][0], tmp[args.dataset][2]
-
+    if not hasattr(args, 'test_envs'):
+        args.test_envs = [0]
     return args
 
 def get_dataset(args):
