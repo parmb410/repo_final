@@ -25,6 +25,39 @@ def get_dataloader(args, tr, val, tar):
     return train_loader, train_loader_noshuffle, valid_loader, target_loader
 
 
+def get_dataset(args):
+    """
+    Returns (train_set, val_set, test_set) as expected by the main DIVERSIFY pipeline.
+    - train_set: training samples for source domains
+    - val_set: validation split from source domains
+    - test_set: combined target domains
+    """
+    source_datasetlist = []
+    target_datalist = []
+    pcross_act = task_act[args.task]
+
+    tmpp = args.act_people[args.dataset]
+    args.domain_num = len(tmpp)
+    for i, item in enumerate(tmpp):
+        tdata = pcross_act.ActList(
+            args, args.dataset, args.data_dir, item, i, transform=actutil.act_train())
+        if i in args.test_envs:
+            target_datalist.append(tdata)
+        else:
+            source_datasetlist.append(tdata)
+    rate = 0.2
+    tdata = combindataset(args, source_datasetlist)
+    l = len(tdata.labels)
+    indexall = np.arange(l)
+    np.random.seed(args.seed)
+    np.random.shuffle(indexall)
+    ted = int(l * rate)
+    indextr, indexval = indexall[ted:], indexall[:ted]
+    tr = subdataset(args, tdata, indextr)
+    val = subdataset(args, tdata, indexval)
+    targetdata = combindataset(args, target_datalist)
+    return tr, val, targetdata
+
 def get_act_dataloader(args):
     source_datasetlist = []
     target_datalist = []
