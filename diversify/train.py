@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from utils import set_seed, get_algorithm_class, evaluate, print_args
-from datautil.util import get_input_shape, Nmax, act_param_init  # <-- Import act_param_init
+from datautil.util import get_input_shape, Nmax, act_param_init
 from datautil.getdataloader_single import get_dataset
 from latent_split import estimate_optimal_k, assign_domains
 from datautil.getcurriculumloader import get_curriculum_loader
@@ -118,5 +118,6 @@ if __name__ == "__main__":
     parser.add_argument('--warmup', action='store_true', help="Warm-up encoder before K estimation")
     parser.add_argument('--curriculum', action='store_true', help="Enable curriculum learning")
     args = parser.parse_args()
-    args = act_param_init(args)   # <-- KEY LINE TO FIX YOUR ERROR
+    from datautil.util import act_param_init
+    args = act_param_init(args)
     main(args)
