@@ -1,124 +1,128 @@
+# Copyright (c) Microsoft Corporation and contributors.
+# Licensed under the MIT License.
 
-# Fully integrated train.py with Automated K Estimation
-
-import time
-import torch
+import argparse
+import os
 import numpy as np
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
-from alg.opt import *
-from alg import alg, modelopera
-from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
-from datautil.getdataloader_single import get_act_dataloader
+import torch
+from torch.utils.data import DataLoader
 
-def automated_k_estimation(features, k_min=2, k_max=10):
-    best_k = k_min
-    best_score = -1
+from diversify.utils import set_seed, get_algorithm_class, evaluate, print_args
+from diversify.datautil.util import get_dataset, get_input_shape, Nmax
+from diversify.latent_split import estimate_optimal_k, assign_domains
+from diversify.datautil.getcurriculumloader import get_curriculum_loader
 
-    for k in range(k_min, k_max + 1):
-        kmeans = KMeans(n_clusters=k, random_state=42).fit(features)
-        labels = kmeans.labels_
-        score = silhouette_score(features, labels)
+# ---- Curriculum Learning Utilities ----
+def compute_domain_difficulty(domain_losses):
+    # Sort domains by validation loss (ascending: easy→hard)
+    return sorted(domain_losses, key=domain_losses.get)
 
-        if score > best_score:
-            best_k = k
-            best_score = score
+def pretrain_encoder(model, train_loader, device, pretrain_epochs=2):
+    # Optional: Warm-up encoder before K estimation
+    model.train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    for epoch in range(pretrain_epochs):
+        for x, y, *_ in train_loader:
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
+            loss = model.loss(x, y)
+            loss.backward()
+            optimizer.step()
+    print("Encoder pre-training done.")
 
-    print(f"[INFO] Optimal K determined as {best_k} (Silhouette Score: {best_score:.4f})")
-    return best_k
-
+# ---- Main ----
 def main(args):
-    s = print_args(args, [])
-    set_random_seed(args.seed)
+    set_seed(args.seed)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print_args(args)
 
-    print_environ()
-    print(s)
+    # ==== 1. Load Dataset ====
+    train_set, val_set, test_set = get_dataset(args)
+    input_shape = get_input_shape(train_set)
+    num_classes = Nmax(train_set)
 
-    train_loader, train_loader_noshuffle, valid_loader, target_loader, _, _, _ = get_act_dataloader(args)
+    # ==== 2. Initialize Model ====
+    AlgorithmClass = get_algorithm_class(args.algorithm)
+    model = AlgorithmClass(input_shape, num_classes, args).to(device)
 
-    algorithm_class = alg.get_algorithm_class(args.algorithm)
-    algorithm = algorithm_class(args).cuda()
+    # ==== 3. Optional Encoder Warm-up ====
+    if args.warmup:
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
+        pretrain_encoder(model, train_loader, device, pretrain_epochs=2)
 
-    # Automated K Estimation
-    algorithm.eval()
-    feature_list = []
+    # ==== 4. Automated K Estimation ====
+    print("Estimating optimal K and assigning domain labels...")
+    # This function must return: domain_labels (array), K (int)
+    domain_labels, K = estimate_optimal_k(train_set, model, device, args)
 
-    with torch.no_grad():
-        for batch in train_loader:
-            data = batch[0].cuda() if isinstance(batch, (list, tuple)) else batch.cuda()
-            features = algorithm.featurizer(data)  # Or your actual encoder logic
-            feature_list.append(features.cpu().numpy())
+    # Assign these labels into dataset for use in curriculum (and everywhere)
+    assign_domains(train_set, domain_labels)
+    assign_domains(val_set, domain_labels, allow_missing=True)
+    assign_domains(test_set, domain_labels, allow_missing=True)
+    print(f"Estimated K = {K}")
 
-    all_features = np.concatenate(feature_list, axis=0)
-    optimal_k = automated_k_estimation(all_features)
-    args.latent_domain_num = optimal_k
-    print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
-
-    # Batch size adjustment based on latent_domain_num
-    if args.latent_domain_num < 6:
-        args.batch_size = 32 * args.latent_domain_num
+    # ==== 5. Curriculum Learning Loader ====
+    if args.curriculum:
+        print("Preparing curriculum learning loader...")
+        # Compute per-domain validation loss (or use another difficulty metric)
+        domain_losses = {}
+        for k in range(K):
+            domain_subset = [i for i, d in enumerate(domain_labels) if d == k]
+            if not domain_subset: continue
+            xs = torch.stack([train_set[i][0] for i in domain_subset])
+            ys = torch.tensor([train_set[i][1] for i in domain_subset])
+            with torch.no_grad():
+                pred = model(xs.to(device)).cpu()
+                domain_losses[k] = torch.nn.functional.cross_entropy(pred, ys).item()
+        curriculum_order = compute_domain_difficulty(domain_losses)
+        train_loader = get_curriculum_loader(train_set, domain_labels, curriculum_order, args)
     else:
-        args.batch_size = 16 * args.latent_domain_num
+        train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
 
-    best_valid_acc, target_acc = 0, 0
+    # ==== 6. Validation/Test Loaders ====
+    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False)
+    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
 
-    algorithm.train()
-    optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
-    opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
-    opta = get_optimizer(algorithm, args, nettype='Diversify-all')
+    # ==== 7. Training Loop ====
+    best_val_acc = 0
+    for epoch in range(args.max_epoch):
+        model.train()
+        for batch in train_loader:
+            if isinstance(batch, (tuple, list)):
+                x, y = batch[:2]
+            else:
+                x, y = batch
+            x, y = x.to(device), y.to(device)
+            model.optimizer.zero_grad()
+            loss = model.loss(x, y)
+            loss.backward()
+            model.optimizer.step()
+        # ==== 8. Validation ====
+        val_acc = evaluate(model, val_loader, device)
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            # Optionally save best model
+        print(f"Epoch {epoch}: Val Acc={val_acc:.4f}")
 
-    for round in range(args.max_epoch):
-        print(f'\n========ROUND {round}========')
-        print('====Feature update====')
-        loss_list = ['class']
-        print_row(['epoch']+[item+'_loss' for item in loss_list], colwidth=15)
+    # ==== 9. Final Evaluation ====
+    test_acc = evaluate(model, test_loader, device)
+    print(f"Test Accuracy: {test_acc:.4f}")
 
-        for step in range(args.local_epoch):
-            for data in train_loader:
-                loss_result_dict = algorithm.update_a(data, opta)
-            print_row([step]+[loss_result_dict[item] for item in loss_list], colwidth=15)
-
-        print('====Latent domain characterization====')
-        loss_list = ['total', 'dis', 'ent']
-        print_row(['epoch']+[item+'_loss' for item in loss_list], colwidth=15)
-
-        for step in range(args.local_epoch):
-            for data in train_loader:
-                loss_result_dict = algorithm.update_d(data, optd)
-            print_row([step]+[loss_result_dict[item] for item in loss_list], colwidth=15)
-
-        algorithm.set_dlabel(train_loader)
-
-        print('====Domain-invariant feature learning====')
-        loss_list = alg_loss_dict(args)
-        eval_dict = train_valid_target_eval_names(args)
-        print_key = ['epoch']
-        print_key.extend([item+'_loss' for item in loss_list])
-        print_key.extend([item+'_acc' for item in eval_dict.keys()])
-        print_key.append('total_cost_time')
-        print_row(print_key, colwidth=15)
-
-        sss = time.time()
-        for step in range(args.local_epoch):
-            for data in train_loader:
-                step_vals = algorithm.update(data, opt)
-
-            results = {'epoch': step}
-            results['train_acc'] = modelopera.accuracy(algorithm, train_loader_noshuffle, None)
-            results['valid_acc'] = modelopera.accuracy(algorithm, valid_loader, None)
-            results['target_acc'] = modelopera.accuracy(algorithm, target_loader, None)
-
-            for key in loss_list:
-                results[key+'_loss'] = step_vals[key]
-
-            if results['valid_acc'] > best_valid_acc:
-                best_valid_acc = results['valid_acc']
-                target_acc = results['target_acc']
-            results['total_cost_time'] = time.time()-sss
-            print_row([results[key] for key in print_key], colwidth=15)
-
-    print(f'Target acc: {target_acc:.4f}')
-
-if __name__ == '__main__':
-    args = get_args()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="DIVERSIFY with Curriculum Learning & Automated K Estimation")
+    parser.add_argument('--data_dir', type=str, default='./data/')
+    parser.add_argument('--dataset', type=str, default='emg')
+    parser.add_argument('--task', type=str, default='cross_people')
+    parser.add_argument('--algorithm', type=str, default='diversify')
+    parser.add_argument('--alpha1', type=float, default=1.0)
+    parser.add_argument('--alpha', type=float, default=1.0)
+    parser.add_argument('--lam', type=float, default=0.0)
+    parser.add_argument('--local_epoch', type=int, default=3)
+    parser.add_argument('--max_epoch', type=int, default=50)
+    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--warmup', action='store_true', help="Warm-up encoder before K estimation")
+    parser.add_argument('--curriculum', action='store_true', help="Enable curriculum learning")
+    args = parser.parse_args()
     main(args)
