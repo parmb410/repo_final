@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+# Import everything as local modules
 from utils import set_seed, get_algorithm_class, evaluate, print_args
 from datautil.util import get_dataset, get_input_shape, Nmax
 from latent_split import estimate_optimal_k, assign_domains
