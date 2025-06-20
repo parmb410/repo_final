@@ -41,6 +41,14 @@ class Diversify(Algorithm):
             args.bottleneck, args.dis_hidden, args.latent_domain_num)
         self.args = args
 
+    def get_feature(self, x):
+        """
+        Return latent feature representations (used for clustering/automated K estimation).
+        """
+        # Use the main bottleneck branch (can be changed if another is preferred for K estimation)
+        x = x.cuda().float() if torch.cuda.is_available() else x.float()
+        return self.bottleneck(self.featurizer(x))
+
     def update_d(self, minibatch, opt):
         all_x1 = minibatch[0].cuda().float()
         all_d1 = minibatch[1].cuda().long()
