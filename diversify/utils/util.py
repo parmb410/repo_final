@@ -1,7 +1,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-
 import random
 import numpy as np
 import torch
@@ -11,6 +10,20 @@ import argparse
 import torchvision
 import PIL
 
+def set_seed(seed):
+    """
+    Robust seed setter for full reproducibility across random, numpy, torch, and CUDA.
+    """
+    import random, os
+    import numpy as np
+    import torch
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def set_random_seed(seed=0):
     random.seed(seed)
@@ -19,7 +32,6 @@ def set_random_seed(seed=0):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-
 
 def train_valid_target_eval_names(args):
     eval_name_dict = {'train': [], 'valid': [], 'target': []}
@@ -31,11 +43,9 @@ def train_valid_target_eval_names(args):
             eval_name_dict['target'].append('eval%d_out' % i)
     return eval_name_dict
 
-
 def alg_loss_dict(args):
     loss_dict = {'diversify': ['class', 'dis', 'total']}
     return loss_dict[args.algorithm]
-
 
 def print_args(args, print_list):
     s = "==========================================\n"
@@ -44,7 +54,6 @@ def print_args(args, print_list):
         if l == 0 or arg in print_list:
             s += "{}:{}\n".format(arg, content)
     return s
-
 
 def print_row(row, colwidth=10, latex=False):
     if latex:
@@ -60,7 +69,6 @@ def print_row(row, colwidth=10, latex=False):
         return str(x).ljust(colwidth)[:colwidth]
     print(sep.join([format_val(x) for x in row]), end_)
 
-
 def print_environ():
     print("Environment:")
     print("\tPython: {}".format(sys.version.split(" ")[0]))
@@ -70,7 +78,6 @@ def print_environ():
     print("\tCUDNN: {}".format(torch.backends.cudnn.version()))
     print("\tNumPy: {}".format(np.__version__))
     print("\tPIL: {}".format(PIL.__version__))
-
 
 class Tee:
     def __init__(self, fname, mode="a"):
@@ -86,7 +93,6 @@ class Tee:
         self.stdout.flush()
         self.file.flush()
 
-
 def act_param_init(args):
     args.select_position = {'emg': [0]}
     args.select_channel = {'emg': np.arange(8)}
@@ -97,7 +103,6 @@ def act_param_init(args):
         args.dataset][1], tmp[args.dataset][0], tmp[args.dataset][2]
 
     return args
-
 
 def get_args():
     parser = argparse.ArgumentParser(description='DG')
