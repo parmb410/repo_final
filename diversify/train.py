@@ -22,8 +22,9 @@ def pretrain_encoder(model, train_loader, device, pretrain_epochs=2):
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     for epoch in range(pretrain_epochs):
-        for x, y, *_ in train_loader:
-            x, y = x.to(device), y.to(device)
+        for batch in train_loader:
+            x = batch[0].to(device)
+            y = batch[1].to(device)
             optimizer.zero_grad()
             loss = model.loss(x, y)
             loss.backward()
@@ -34,16 +35,18 @@ def pretrain_encoder(model, train_loader, device, pretrain_epochs=2):
 def main(args):
     set_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print_args(args)
+    print(print_args(args, []))
 
     # ==== 1. Load Dataset ====
     train_set, val_set, test_set = get_dataset(args)
     input_shape = get_input_shape(train_set)
-    num_classes = Nmax(train_set)
+    num_classes = Nmax(args, 0)  # or use actual class count
 
     # ==== 2. Initialize Model ====
     AlgorithmClass = get_algorithm_class(args.algorithm)
     model = AlgorithmClass(input_shape, num_classes, args).to(device)
+    if not hasattr(model, 'optimizer'):
+        model.optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # ==== 3. Optional Encoder Warm-up ====
     if args.warmup:
@@ -69,11 +72,12 @@ def main(args):
         for k in range(K):
             domain_subset = [i for i, d in enumerate(domain_labels) if d == k]
             if not domain_subset: continue
+            # Use custom dataset output structure
             xs = torch.stack([train_set[i][0] for i in domain_subset])
             ys = torch.tensor([train_set[i][1] for i in domain_subset])
             with torch.no_grad():
-                pred = model(xs.to(device)).cpu()
-                domain_losses[k] = torch.nn.functional.cross_entropy(pred, ys).item()
+                pred = model(xs.to(device))
+                domain_losses[k] = torch.nn.functional.cross_entropy(pred.cpu(), ys).item()
         curriculum_order = compute_domain_difficulty(domain_losses)
         train_loader = get_curriculum_loader(train_set, domain_labels, curriculum_order, args)
     else:
@@ -88,13 +92,12 @@ def main(args):
     for epoch in range(args.max_epoch):
         model.train()
         for batch in train_loader:
-            if isinstance(batch, (tuple, list)):
-                x, y = batch[:2]
-            else:
-                x, y = batch
-            x, y = x.to(device), y.to(device)
+            # Unpack according to your dataset structure
+            x = batch[0].to(device)
+            y = batch[1].to(device)
             model.optimizer.zero_grad()
-            loss = model.loss(x, y)
+            # Call model.loss(x, y), if your Algorithm class provides it, otherwise use model(x)
+            loss = model.loss(x, y) if hasattr(model, 'loss') else torch.nn.functional.cross_entropy(model(x), y)
             loss.backward()
             model.optimizer.step()
         # ==== 8. Validation ====
