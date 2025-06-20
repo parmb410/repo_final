@@ -7,20 +7,17 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-# Import everything as local modules
 from utils import set_seed, get_algorithm_class, evaluate, print_args
-from datautil.util import get_input_shape, Nmax
+from datautil.util import get_input_shape, Nmax, act_param_init  # <-- Import act_param_init
 from datautil.getdataloader_single import get_dataset
 from latent_split import estimate_optimal_k, assign_domains
 from datautil.getcurriculumloader import get_curriculum_loader
 
 # ---- Curriculum Learning Utilities ----
 def compute_domain_difficulty(domain_losses):
-    # Sort domains by validation loss (ascending: easy→hard)
     return sorted(domain_losses, key=domain_losses.get)
 
 def pretrain_encoder(model, train_loader, device, pretrain_epochs=2):
-    # Optional: Warm-up encoder before K estimation
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     for epoch in range(pretrain_epochs):
@@ -57,10 +54,7 @@ def main(args):
 
     # ==== 4. Automated K Estimation ====
     print("Estimating optimal K and assigning domain labels...")
-    # This function must return: domain_labels (array), K (int)
     domain_labels, K = estimate_optimal_k(train_set, model, device, args)
-
-    # Assign these labels into dataset for use in curriculum (and everywhere)
     assign_domains(train_set, domain_labels)
     assign_domains(val_set, domain_labels, allow_missing=True)
     assign_domains(test_set, domain_labels, allow_missing=True)
@@ -69,12 +63,10 @@ def main(args):
     # ==== 5. Curriculum Learning Loader ====
     if args.curriculum:
         print("Preparing curriculum learning loader...")
-        # Compute per-domain validation loss (or use another difficulty metric)
         domain_losses = {}
         for k in range(K):
             domain_subset = [i for i, d in enumerate(domain_labels) if d == k]
             if not domain_subset: continue
-            # Use custom dataset output structure
             xs = torch.stack([train_set[i][0] for i in domain_subset])
             ys = torch.tensor([train_set[i][1] for i in domain_subset])
             with torch.no_grad():
@@ -94,22 +86,18 @@ def main(args):
     for epoch in range(args.max_epoch):
         model.train()
         for batch in train_loader:
-            # Unpack according to your dataset structure
             x = batch[0].to(device)
             y = batch[1].to(device)
             model.optimizer.zero_grad()
-            # Call model.loss(x, y), if your Algorithm class provides it, otherwise use model(x)
             loss = model.loss(x, y) if hasattr(model, 'loss') else torch.nn.functional.cross_entropy(model(x), y)
             loss.backward()
             model.optimizer.step()
-        # ==== 8. Validation ====
         val_acc = evaluate(model, val_loader, device)
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             # Optionally save best model
         print(f"Epoch {epoch}: Val Acc={val_acc:.4f}")
 
-    # ==== 9. Final Evaluation ====
     test_acc = evaluate(model, test_loader, device)
     print(f"Test Accuracy: {test_acc:.4f}")
 
@@ -130,4 +118,5 @@ if __name__ == "__main__":
     parser.add_argument('--warmup', action='store_true', help="Warm-up encoder before K estimation")
     parser.add_argument('--curriculum', action='store_true', help="Enable curriculum learning")
     args = parser.parse_args()
+    args = act_param_init(args)   # <-- KEY LINE TO FIX YOUR ERROR
     main(args)
