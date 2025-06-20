@@ -7,10 +7,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from diversify.utils import set_seed, get_algorithm_class, evaluate, print_args
-from diversify.datautil.util import get_dataset, get_input_shape, Nmax
-from diversify.latent_split import estimate_optimal_k, assign_domains
-from diversify.datautil.getcurriculumloader import get_curriculum_loader
+from utils import set_seed, get_algorithm_class, evaluate, print_args
+from datautil.util import get_dataset, get_input_shape, Nmax
+from latent_split import estimate_optimal_k, assign_domains
+from datautil.getcurriculumloader import get_curriculum_loader
 
 # ---- Curriculum Learning Utilities ----
 def compute_domain_difficulty(domain_losses):
