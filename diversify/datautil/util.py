@@ -1,17 +1,14 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-
 import numpy as np
 import torch
-
 
 def Nmax(args, d):
     for i in range(len(args.test_envs)):
         if d < args.test_envs[i]:
             return i
     return len(args.test_envs)
-
 
 class basedataset(object):
     def __init__(self, x, y):
@@ -24,12 +21,11 @@ class basedataset(object):
     def __len__(self):
         return len(self.x)
 
-
 class mydataset(object):
     def __init__(self, args):
         self.x = None
-        self.labels = None
-        self.dlabels = None
+        self.labels = None        # Class labels
+        self.dlabels = None       # Domain labels
         self.pclabels = None
         self.pdlabels = None
         self.task = None
@@ -75,22 +71,28 @@ class mydataset(object):
     def __getitem__(self, index):
         x = self.input_trans(self.x[index])
 
-        ctarget = self.target_trans(self.labels[index])
-        dtarget = self.target_trans(self.dlabels[index])
-        pctarget = self.target_trans(self.pclabels[index])
-        pdtarget = self.target_trans(self.pdlabels[index])
+        ctarget = self.target_trans(self.labels[index]) if self.labels is not None else None
+        # --- Add robust domain label support for curriculum/K ---
+        dtarget = self.target_trans(self.dlabels[index]) if self.dlabels is not None else -1
+        pctarget = self.target_trans(self.pclabels[index]) if self.pclabels is not None else None
+        pdtarget = self.target_trans(self.pdlabels[index]) if self.pdlabels is not None else None
+
+        # Always return x, class label, domain label, and others (order is important)
         return x, ctarget, dtarget, pctarget, pdtarget, index
 
     def __len__(self):
         return len(self.x)
 
+    # New: Utility to expose only domain labels (for clustering/curriculum)
+    def get_domain_labels(self):
+        return self.dlabels if self.dlabels is not None else np.zeros(len(self.x), dtype=int)
 
 class subdataset(mydataset):
     def __init__(self, args, dataset, indices):
         super(subdataset, self).__init__(args)
         self.x = dataset.x[indices]
         self.loader = dataset.loader
-        self.labels = dataset.labels[indices]
+        self.labels = dataset.labels[indices] if dataset.labels is not None else None
         self.dlabels = dataset.dlabels[indices] if dataset.dlabels is not None else None
         self.pclabels = dataset.pclabels[indices] if dataset.pclabels is not None else None
         self.pdlabels = dataset.pdlabels[indices] if dataset.pdlabels is not None else None
@@ -98,7 +100,6 @@ class subdataset(mydataset):
         self.dataset = dataset.dataset
         self.transform = dataset.transform
         self.target_transform = dataset.target_transform
-
 
 class combindataset(mydataset):
     def __init__(self, args, datalist):
@@ -116,7 +117,7 @@ class combindataset(mydataset):
         self.target_transform = datalist[0].target_transform
         self.x = torch.vstack(xlist)
 
-        self.labels = np.hstack(cylist)
-        self.dlabels = np.hstack(dylist)
+        self.labels = np.hstack(cylist) if cylist[0] is not None else None
+        self.dlabels = np.hstack(dylist) if dylist[0] is not None else None
         self.pclabels = np.hstack(pcylist) if pcylist[0] is not None else None
         self.pdlabels = np.hstack(pdylist) if pdylist[0] is not None else None
