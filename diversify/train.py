@@ -117,6 +117,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--warmup', action='store_true', help="Warm-up encoder before K estimation")
     parser.add_argument('--curriculum', action='store_true', help="Enable curriculum learning")
+    parser.add_argument('--test_envs', type=int, nargs='+', default=[0], help="Index(es) of test domains")
     args = parser.parse_args()
     from datautil.util import act_param_init
     args = act_param_init(args)
