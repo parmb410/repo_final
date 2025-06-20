@@ -4,6 +4,24 @@
 import numpy as np
 import torch
 
+# Add to datautil/util.py
+
+def get_dataset(args):
+    """Return train/val/test splits based on args.dataset and args.task."""
+    # --- Example for EMG ---
+    from .emg_dataset import EMGDataset  # adjust to your code  
+    train_set = EMGDataset(args, split='train')
+    val_set = EMGDataset(args, split='val')
+    test_set = EMGDataset(args, split='test')
+    return train_set, val_set, test_set
+
+def get_input_shape(dataset):
+    """Extract input_shape from dataset."""
+    sample = dataset[0][0]  # x, y, d, pc, pd, idx
+    return sample.shape
+
+# Ensure Nmax is properly defined as you have it
+
 def Nmax(args, d):
     for i in range(len(args.test_envs)):
         if d < args.test_envs[i]:
